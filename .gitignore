@@ -1,0 +1,7 @@
+*.csv
+*.zip
+*.tar.gz
+*.h5
+*.pkl
+*.npz
+__pycache__/
