@@ -1,0 +1,144 @@
+---
+title: "histogram_accuracies"
+output: html_document
+date: "2025-02-04"
+---
+
+```{r}
+library(dplyr)
+library(lubridate)
+library(readr)
+library(rugarch)
+library(tseries)
+library(zoo)
+library(ggplot2)
+library(stats)
+library(lmtest)
+library(nortest)
+library(forecast)
+
+rm(list = ls())
+```
+
+Set paths
+
+```{r}
+data_path <- "/Users/paulaarraizaarias/Documents/ucm/tfg/matematicas/07_data"
+plots_path <- "/Users/paulaarraizaarias/Documents/ucm/tfg/matematicas/02_plots"
+docs_path <- "/Users/paulaarraizaarias/Documents/ucm/tfg/matematicas/05_docs"
+results_path <- "/Users/paulaarraizaarias/Documents/ucm/tfg/matematicas/08_results"
+```
+
+
+```{r}
+
+timeseries_results_path <- file.path(results_path, "time_series")
+csv_files <- list.files(path = timeseries_results_path, pattern = "*.csv", full.names = TRUE)
+
+combined_df <- bind_rows(lapply(csv_files, read.csv))
+
+head(combined_df)
+```
+
+Plot histogram for each stock
+```{r}
+
+# Load necessary libraries
+library(ggplot2)
+library(dplyr)
+
+
+ggplot(combined_df, aes(x = accuracy)) +
+  geom_histogram(binwidth = 0.02, fill = "blue", color = "black", alpha = 0.7) +
+  facet_wrap(~ stock_name, ncol = 3) +  # Arrange in a 3x3 grid
+  theme_minimal() +
+  labs(title = "Histograms of Accuracy by Stock",
+       x = "Accuracy",
+       y = "Frequency")
+
+```
+
+```{r}
+
+stock_names <- c("AAPL", "NVDA", "MSFT", "BTC", "WTI", "META", "GOOGL", "SPX", "AMZN")
+
+for (filter_stock_name in stock_names) {
+  
+  filtered_df <- combined_df %>% filter(stock_name == filter_stock_name)
+
+  p <- ggplot(filtered_df, aes(x = accuracy)) +
+    geom_histogram(binwidth = 0.02, fill = "darkblue", color = "black", alpha = 0.7) +
+    geom_vline(xintercept = 0.5, color = "red", linetype = "solid", size = 0.8) +
+
+    theme_classic() +
+    labs(
+      title = paste0("Histograma de Precisión para ", filter_stock_name),
+      subtitle = "Ajuste ARIMA-GARCH",
+      x = "Precisión",
+      y = "Frecuencia"
+    ) +
+    theme(
+      plot.title = element_text(face = "bold", hjust = 0.5, size = 14),  # Negrita y centrado
+      plot.subtitle = element_text(hjust = 0.5, size = 12)
+    ) +
+  xlim(0, 1) 
+  
+  output_file <- file.path(plots_path, paste0("time_series/results/", filter_stock_name, ".png"))
+  ggsave(output_file, plot = p, width = 8, height = 6, dpi = 300)
+  
+}
+
+```    
+
+
+
+```{r}
+stock_names <- c("AAPL", "NVDA", "MSFT", "BTC", "WTI", "META", "GOOGL", "SPX", "AMZN")
+combined_df <- combined_df %>% filter(test_size != 2)
+summary_stats <- combined_df %>%
+  group_by(stock_name) %>%
+  summarise(
+    mean_accuracy = mean(accuracy, na.rm = TRUE),
+    min_accuracy = min(accuracy, na.rm = TRUE),
+    max_accuracy = max(accuracy, na.rm = TRUE),
+    std_accuracy = sd(accuracy, na.rm = TRUE)
+  ) %>%
+  ungroup()
+
+
+output_path <- "/Users/paulaarraizaarias/Documents/ucm/tfg/matematicas/02_plots/time_series/results/summary_statistics.csv"
+# write.csv(summary_stats, output_path, row.names = FALSE)
+summary_stats
+```  
+
+```{r}
+
+summary_stats1 <- combined_df %>%
+  group_by(train_perc) %>%
+  summarise(
+    mean_accuracy = mean(accuracy, na.rm = TRUE),
+    min_accuracy = min(accuracy, na.rm = TRUE),
+    max_accuracy = max(accuracy, na.rm = TRUE),
+    std_accuracy = sd(accuracy, na.rm = TRUE)
+  ) %>%
+  ungroup()
+
+summary_stats1
+
+```  
+```{r}
+
+summary_stats2 <- combined_df %>%
+  group_by(start_date) %>%
+  summarise(
+    mean_accuracy = mean(accuracy, na.rm = TRUE),
+    min_accuracy = min(accuracy, na.rm = TRUE),
+    max_accuracy = max(accuracy, na.rm = TRUE),
+    std_accuracy = sd(accuracy, na.rm = TRUE)
+  ) %>%
+  ungroup()
+
+summary_stats2
+
+```  
+

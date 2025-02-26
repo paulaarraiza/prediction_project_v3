@@ -1,0 +1,367 @@
+---
+title: "garch_prediction"
+output: html_document
+date: "2025-02-03"
+---
+
+First, load needed libraries
+
+```{r}
+library(dplyr)
+library(lubridate)
+library(readr)
+library(rugarch)
+library(tseries)
+library(zoo)
+library(ggplot2)
+library(stats)
+library(lmtest)
+library(nortest)
+
+rm(list = ls())
+```
+
+Set paths
+
+```{r}
+data_path <- "/Users/paulaarraizaarias/Documents/ucm/tfg/matematicas/07_data"
+docs_path <- "/Users/paulaarraizaarias/Documents/ucm/tfg/matematicas/05_docs"
+```
+
+Load data 
+
+```{r}
+apple_data_raw <- read.csv(file.path(data_path, "stocks/AAPL_Close.csv"), sep=";", dec=",",stringsAsFactors=FALSE) 
+```
+
+
+```{r}
+generate_ts <- function(df) {  
+  df <- df[c("Date", "Close")]
+  df$Date <- dmy(df$Date)
+  df$Close <- as.numeric(df$Close)
+  
+  df_ret <- df %>%
+    mutate(Return = (Close / lag(Close) - 1))
+  
+  df_ret <- df_ret[-1, ]
+  df_ret$Return <- df_ret$Return * 100
+  
+  ts_data <- zoo(df_ret$Return, order.by = df_ret$Date)
+  
+  all_dates_ret <- seq(min(df_ret$Date), max(df_ret$Date), by = "day")
+  
+  ts <- merge(ts_data, zoo(, all_dates_ret))
+  ts <- na.approx(ts)
+  
+  # DataFrame with only Date and Return
+  df_full_ret <- data.frame(Date = index(ts), Return = coredata(ts))
+  
+  # DataFrame with Date, Return, and Close
+  df_full_close <- merge(df_full_ret, df_ret[, c("Date", "Close")], by = "Date", all.x = TRUE)
+  
+  # Plot the returns with ggplot2
+  plot_returns <- ggplot(df_full_ret, aes(x = Date, y = Return)) +
+    geom_line(color = "blue") +
+    geom_hline(aes(yintercept = mean(Return)), linetype = "dashed", color = "red") +
+    labs(title = "AAPL Daily Returns", x = "Date", y = "Return") +
+    theme_minimal() +  
+    theme(
+      panel.background = element_rect(fill = "white", color = NA),  
+      plot.background = element_rect(fill = "white", color = NA),   
+      panel.grid.major = element_line(color = "grey90"),            
+      panel.grid.minor = element_blank()  
+    )
+  
+  return(list(df_full_ret = df_full_ret, df_full_close = df_full_close))
+}
+
+generate_log_ts <- function(df) {  
+  df <- df[c("Date", "Close")]
+  df$Date <- dmy(df$Date)
+  df$Close <- as.numeric(df$Close)
+  
+  df_ret <- df %>%
+    mutate(Return = log(Close) - log(lag(Close)))
+  
+  df_ret <- df_ret[-1, ]
+  df_ret$Return <- df_ret$Return * 100
+  
+  ts_data <- zoo(df_ret$Return, order.by = df_ret$Date)
+  
+  all_dates_ret <- seq(min(df_ret$Date), max(df_ret$Date), by = "day")
+  
+  ts <- merge(ts_data, zoo(, all_dates_ret))
+  ts <- na.approx(ts)
+  
+  # DataFrame with only Date and Return
+  df_full_ret <- data.frame(Date = index(ts), Return = coredata(ts))
+  
+  # DataFrame with Date, Return, and Close
+  df_full_close <- merge(df_full_ret, df_ret[, c("Date", "Close")], by = "Date", all.x = TRUE)
+  
+  # Plot the returns with ggplot2
+  plot_returns <- ggplot(df_full_ret, aes(x = Date, y = Return)) +
+    geom_line(color = "blue") +
+    geom_hline(aes(yintercept = mean(Return)), linetype = "dashed", color = "red") +
+    labs(title = "AAPL Daily Returns", x = "Date", y = "Return") +
+    theme_minimal() +  
+    theme(
+      panel.background = element_rect(fill = "white", color = NA),  
+      plot.background = element_rect(fill = "white", color = NA),   
+      panel.grid.major = element_line(color = "grey90"),            
+      panel.grid.minor = element_blank()  
+    )
+  
+  return(list(df_full_ret = df_full_ret, df_full_close = df_full_close))
+}
+
+
+remove_outliers <- function(df, column_name = "Return") {
+  print(paste("Removing outliers from column:", column_name, "..."))
+  
+  # Compute IQR
+  q1 <- quantile(df[[column_name]], 0.25, na.rm = TRUE)
+  q3 <- quantile(df[[column_name]], 0.75, na.rm = TRUE)
+  iqr <- q3 - q1
+  lower_bound <- q1 - 2.5 * iqr
+  upper_bound <- q3 + 2.5 * iqr
+
+  print(paste("Outlier thresholds - Lower:", lower_bound, ", Upper:", upper_bound))
+
+  # Identify outliers
+  outlier_indices <- which(df[[column_name]] < lower_bound | df[[column_name]] > upper_bound)
+  print(paste(length(outlier_indices), "outliers detected."))
+
+  # Replace outliers with NA
+  df[outlier_indices, column_name] <- NA
+
+  # Interpolate missing values
+  df[[column_name]] <- na.approx(df[[column_name]], na.rm = FALSE)
+
+  print("Outliers removed and replaced with interpolated values.")
+  return(df)
+}
+
+```
+
+
+```{r}
+
+initial_result_df <- generate_log_ts(apple_data_raw)$df_full_ret
+result_df <- initial_result_df$df_full_ret
+close_result_df <- initial_result_df$df_full_close
+close_result_df$Close <- na.approx(close_result_df$Close, rule = 2)
+
+result_df <- remove_outliers(result_df)
+
+```
+
+```{r}
+generate_summary_table <- function(ts, max_p, max_q, max_r, max_s) {
+  
+  results <- data.frame()
+  
+  for (p in 1:max_p) {
+    for (q in 1:max_q) {
+      for (r in 1:max_r) {
+        for (s in 1:max_s) {
+          cat("Fitting ARMA(", p, ",", q, ") + GARCH(", r, ",", s, ")...\n")
+                
+          # Try-catch to handle models that fail to converge
+          tryCatch({
+            # Define ARMA(p,q) + GARCH(r,s) Model Specification
+            spec <- ugarchspec(
+              mean.model = list(armaOrder = c(p, q), include.mean = TRUE),
+              variance.model = list(model = "sGARCH", garchOrder = c(r, s)),
+              distribution.model = "norm"
+            )
+            
+            # Fit the model
+            garch_fit <- ugarchfit(spec, data = ts, solver = "hybrid")
+  
+            # Extract residuals
+            residuals <- residuals(garch_fit)
+            
+            # Independence Test (Ljung-Box)
+            ljung_box <- Box.test(residuals, lag = 10, type = "Ljung-Box")
+            independence_pval <- ljung_box$p.value
+            
+            # Normality Test (Lilliefors)
+            lillie_test <- lillie.test(residuals)
+            normality_pval <- lillie_test$p.value
+            
+            # Breusch-Pagan Test (Heteroskedasticity)
+            bp_test <- bptest(residuals ~ seq_along(residuals))
+            heteroskedasticity_pval <- bp_test$p.value
+            
+            # Proportion of Significant Coefficients
+            coefs <- coef(garch_fit)
+            se <- garch_fit@fit$matcoef[,2]  # Extract standard errors
+            p_values <- 2 * (1 - pnorm(abs(coefs / se)))  # Compute p-values
+            proportion_significant <- mean(p_values < 0.05)
+            
+            # Store results
+            results <- rbind(results, data.frame(
+              p = p, q = q, r = r, s = s,
+              independence_pval = independence_pval,
+              normality_pval = normality_pval,
+              heteroskedasticity_pval = heteroskedasticity_pval,
+              proportion_significant_coefficients = proportion_significant
+            ))
+          }, error = function(e) {
+            cat("Model ARMA(", p, ",", q, ") + GARCH(", r, ",", s, ") failed with error:\n")
+            cat(conditionMessage(e), "\n")  # Print the real error
+          })
+        }
+      }
+    }
+  }
+
+  return(results)
+}
+
+```
+
+Choose best model
+
+```{r}
+
+select_best_model <- function(df, alpha = 0.05) {  
+  final_alpha <- alpha
+  
+  # First attempt: alpha = 0.05
+  filtered_df <- df[df$independence_pval > final_alpha & df$heteroskedasticity_pval > final_alpha, ]
+  
+  # If no models satisfy the condition, try alpha = 0.01
+  if (nrow(filtered_df) == 0) {
+    warning("No models meet the independence and homoscedasticity criteria at alpha = 0.05. Trying with alpha = 0.01.")
+    final_alpha <- 0.01
+    filtered_df <- df[df$independence_pval > final_alpha & df$heteroskedasticity_pval > final_alpha, ]
+  }
+  
+  # If still no models, return NULL
+  if (nrow(filtered_df) == 0) {
+    warning("No models meet the independence and homoscedasticity criteria at alpha = 0.01.")
+    return(NULL)
+  }
+  
+  # Select the model with the highest proportion of significant coefficients
+  max_coeff <- max(filtered_df$proportion_significant_coefficients)
+  best_models <- filtered_df[filtered_df$proportion_significant_coefficients == max_coeff, ]
+  
+  # If multiple best models exist, select the one with the lowest (p, q, r, s)
+  best_model <- if (nrow(best_models) > 1) {
+    best_models[order(best_models$p, best_models$q, best_models$r, best_models$s), ][1, ]
+  } else {
+    best_models
+  }
+  
+  return(list(best_model = best_model, final_alpha = final_alpha))
+}
+
+```
+
+```{r}
+max_p <- 3  
+max_q <- 3  
+max_r <- 3  
+max_s <- 3  
+
+
+ts <- result_df$Return
+n <- length(ts)
+train_size <- floor(0.995 * n)
+ts_train <- ts[1:train_size]
+ts_test <- ts[(train_size+1):n]
+
+results <- generate_summary_table(ts_train, max_p, max_q, max_r, max_s)
+best_model_choice <- select_best_model(results)
+best_model <- best_model_choice$best_model
+alpha <- best_model_choice$final_alpha
+
+print(results)
+```
+With the best model, predict and backtest. 
+
+
+```{r}
+
+best_p <- best_model$p
+best_q <- best_model$q
+best_r <- best_model$r
+best_s <- best_model$s
+
+best_spec <- ugarchspec(
+  mean.model = list(armaOrder = c(best_p, best_q), include.mean = TRUE),
+  variance.model = list(model = "sGARCH", garchOrder = c(best_r, best_s)),
+  distribution.model = "norm"
+)
+
+```
+
+Simple rolling test prediction
+
+```{r}
+
+rolling_test_prediction <- function(ts_train, ts_test, best_spec) {
+  
+  train_size <- length(ts_train)
+  rolling_train <- ts_train
+  rolling_forecasts <- numeric(length(ts_test))
+  growth_forecasts <- numeric(length(ts_test))
+  
+  for (i in 1:length(ts_test)) {
+    cat(i, "/", length(ts_test))
+    
+    best_garch_fit <- ugarchfit(best_spec, data = rolling_train, solver = "hybrid")
+    garch_forecast <- ugarchforecast(best_garch_fit, n.ahead = 1)
+    rolling_forecasts[i] <- fitted(garch_forecast)[1]
+    rolling_train <- c(rolling_train, ts_test[i])
+    
+    growth_forecasts[i] <- ifelse(
+      rolling_forecasts[i]*ts_test[i] > 0,1, # same as realized 
+      0) # otherwise
+  }
+  
+  return(list(growth_forecasts = growth_forecasts, 
+         rolling_forecasts = rolling_forecasts))
+}
+
+prediction_results <- rolling_test_prediction(ts_train, ts_test, best_spec)
+
+growth_forecasts <- prediction_results$growth_forecasts
+rolling_forecasts <- prediction_results$rolling_forecasts
+
+```
+
+Simulate P&L strategy
+```{r}
+
+simulate_pnl <- function(df, growth_forecasts, rolling_forecasts) {
+  
+  daily_pnl <- numeric(length(growth_forecasts)-1)
+  capital <- 0 
+  
+  for (i in seq_len(length(growth_forecasts) - 1)) {
+    entry_price <- df$Close[i]
+    exit_price <- df$Close[i + 1]
+    
+    if (growth_forecasts[i] == 1) {
+      daily_pnl[i] <- exit_price - entry_price # buy and sell
+    } else {
+      daily_pnl[i] <- entry_price - exit_price # sell and buy
+    }
+    capital <- capital + daily_pnl[i + 1]
+  }
+  
+  # Return the daily PnL and final capital
+  return(list(daily_pnl = daily_pnl, final_capital = capital))
+}
+
+test_df <- tail(close_result_df[, c("Date", "Close")], (n-train_size))
+simulation_result <- simulate_pnl(test_df, growth_forecasts)
+simulation_result$daily_pnl
+```
+
+
